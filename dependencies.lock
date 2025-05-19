@@ -1,0 +1,66 @@
+dependencies:
+  espressif/bdc_motor:
+    component_hash: 9292b605cfd390ff62225caa93e02700b86377e6a3156620192e4876dcf87b27
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 0.1.0
+  espressif/cmake_utilities:
+    component_hash: 351350613ceafba240b761b4ea991e0f231ac7a9f59a9ee901f751bddc0bb18f
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.1'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 0.5.3
+  espressif/i2c_bus:
+    component_hash: e3dddc78baa172f4768f3973fbecbd6c6c1f2cb23cc6a36cf3132758be092482
+    dependencies:
+    - name: espressif/cmake_utilities
+      registry_url: https://components.espressif.com
+      require: private
+      version: 0.*
+    - name: idf
+      require: private
+      version: '>=4.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.4.0
+  espressif/led_strip:
+    component_hash: 28c6509a727ef74925b372ed404772aeedf11cce10b78c3f69b3c66799095e2d
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.4'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 2.5.5
+  idf:
+    source:
+      type: idf
+    version: 5.5.0
+  nopnop2002/ssd1306:
+    component_hash: 12ea0a38661a247c9a173b9f988270619b9a5e5ea804c396debaa1f7463a9bfe
+    dependencies: []
+    source:
+      git: https://github.com/nopnop2002/esp-idf-ssd1306.git
+      path: components/ssd1306/
+      type: git
+    version: 80a4ea04aa2c74e270e8957e0e8de16b4503f762
+direct_dependencies:
+- espressif/bdc_motor
+- espressif/i2c_bus
+- espressif/led_strip
+- idf
+- nopnop2002/ssd1306
+manifest_hash: 72629058d98e7168fae1768281d8f566c7558a01af02ad36e0a48640375b166b
+target: esp32c6
+version: 2.0.0
