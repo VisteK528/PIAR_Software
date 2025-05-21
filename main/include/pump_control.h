@@ -5,6 +5,9 @@
 
 #include "bdc_motor.h"
 
+// Pump (DC motor) controlled using H-Bridge driver TB6612FNG
+// Datasheet (accessed date: 20.05.2025): https://www.tme.eu/Document/f69c44f5b284761d41a1fa952256eb8d/TB6612FNG.pdf
+
 #define BDC_MCPWM_TIMER_RESOLUTION_HZ   10000000 // 10MHz, 1 tick = 0.1us
 #define BDC_MCPWM_FREQ_HZ               25000    // 25KHz PWM
 #define BDC_MCPWM_DUTY_TICK_MAX         (BDC_MCPWM_TIMER_RESOLUTION_HZ / BDC_MCPWM_FREQ_HZ)

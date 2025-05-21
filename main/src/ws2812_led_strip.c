@@ -26,6 +26,13 @@ void led_strip_init(led_strip_handle_t* handle) {
     ESP_LOGI(TAG, "Led strip initialized successfully!");
 }
 
+void led_strip_set_mono(led_strip_handle_t* handle, ColorRGB color) {
+    for (int i = 0; i < LED_STRIP_LED_NUM; i++) {
+        ESP_ERROR_CHECK(led_strip_set_pixel(*handle, i, color.red, color.green, color.blue));
+    }
+    led_strip_refresh(*handle);
+}
+
 void led_strip_idle_rotating_animation_blocking(led_strip_handle_t* handle, ColorRGB color,
     uint8_t clockwise, uint8_t update_period_ms) {
 
