@@ -22,7 +22,7 @@ void led_strip_set_mono(led_strip_handle_t* handle, ColorRGB color);
 
 void led_strip_idle_rotating_animation_blocking(led_strip_handle_t* handle, ColorRGB color, uint8_t clockwise, uint8_t update_period_ms);
 void led_strip_idle_breathing_animation_blocking(led_strip_handle_t* handle, ColorRGB color, uint8_t update_period_ms);
-void led_strip_idle_rotating_animation_iteration(led_strip_handle_t* handle, ColorRGB color, uint8_t clockwise);
+void led_strip_idle_rotating_animation_iteration(led_strip_handle_t* handle, ColorRGB color, uint8_t clockwise, uint32_t time_scaling);
 void led_strip_idle_breathing_animation_iteration(led_strip_handle_t* handle, ColorRGB color);
 
 #endif //WS2812_LED_STRIP_H

@@ -60,26 +60,30 @@ void led_strip_idle_rotating_animation_blocking(led_strip_handle_t* handle, Colo
     }
 }
 
-void led_strip_idle_rotating_animation_iteration(led_strip_handle_t* handle, ColorRGB color, uint8_t clockwise) {
+void led_strip_idle_rotating_animation_iteration(led_strip_handle_t* handle, ColorRGB color, uint8_t clockwise, uint32_t time_scaling) {
     static int i = 0;
-    static int j = LED_STRIP_LED_NUM / 2;
+    static int j = -1;
+
+    if (j == -1) {
+        j = time_scaling * LED_STRIP_LED_NUM / 2;
+    }
 
     ESP_ERROR_CHECK(led_strip_clear(*handle));
-    ESP_ERROR_CHECK(led_strip_set_pixel(*handle, i, color.red, color.green, color.blue));
-    ESP_ERROR_CHECK(led_strip_set_pixel(*handle, j, color.red, color.green, color.blue));
+    ESP_ERROR_CHECK(led_strip_set_pixel(*handle, i / time_scaling, color.red, color.green, color.blue));
+    ESP_ERROR_CHECK(led_strip_set_pixel(*handle, j / time_scaling, color.red, color.green, color.blue));
     led_strip_refresh(*handle);
 
     if(clockwise == 1) {
         ++i;
         ++j;
-        if(i > LED_STRIP_LED_NUM - 1)  i = 0;
-        if(j > LED_STRIP_LED_NUM - 1)  j = 0;
+        if(i > LED_STRIP_LED_NUM * time_scaling - 1)  i = 0;
+        if(j > LED_STRIP_LED_NUM * time_scaling - 1)  j = 0;
     }
     else {
         --i;
         --j;
-        if(i < 0)  i = LED_STRIP_LED_NUM - 1;
-        if(j < 0)  j = LED_STRIP_LED_NUM - 1;
+        if(i < 0)  i = LED_STRIP_LED_NUM * time_scaling - 1;
+        if(j < 0)  j = LED_STRIP_LED_NUM * time_scaling - 1;
     }
 
 }

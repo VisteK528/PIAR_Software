@@ -4,6 +4,7 @@
 #define PUMP_CONTROL_H
 
 #include "bdc_motor.h"
+#include "ws2812_led_strip.h"
 
 // Pump (DC motor) controlled using H-Bridge driver TB6612FNG
 // Datasheet (accessed date: 20.05.2025): https://www.tme.eu/Document/f69c44f5b284761d41a1fa952256eb8d/TB6612FNG.pdf
@@ -32,7 +33,5 @@ void pump_set_direction_anticlockwise();
 
 void pump_set_speed(bdc_motor_handle_t* motor, float speed);
 void pump_stop();
-
-void pump_pour_milliliters(bdc_motor_handle_t* motor, float milliliters);
 
 #endif //PUMP_CONTROL_H

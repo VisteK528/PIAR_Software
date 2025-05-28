@@ -1,7 +1,9 @@
 #include <stdio.h>
 #include <inttypes.h>
+#include <math.h>
 #include <string.h>
 
+#include "display_functions.h"
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -10,6 +12,7 @@
 #include "esp_flash.h"
 #include "esp_system.h"
 #include "driver/gpio.h"
+#include "i2c_bus.h"
 
 #include "esp_netif.h"
 #include "esp_log.h"
@@ -37,9 +40,12 @@ const uint8_t RFID_TAG[7] = {29, 227, 38, 133, 3, 16, 128};
 
 // =====================================================================================================================
 
-// Water Regulator
+// General settings
+#define FACTORY_RESET_TIME_US       5000000
+#define CUP_READY_DISPLAY_TIME_MS   5000
 
-#define WATER_REGULATOR_DEBUG
+// Water Regulator
+//#define WATER_REGULATOR_DEBUG
 
 ValveStatus_t valve_status = CLOSED;
 const float WATER_Y_ZAD = 10.f;
@@ -83,6 +89,31 @@ led_strip_handle_t led_strip;
 pn532_t pn532_dev;
 bool initializing = true;
 bool factoryResetStarted = false;
+
+// I2C setup
+i2c_master_bus_config_t i2c_mst_config = {
+    .clk_source = I2C_CLK_SRC_DEFAULT,
+    .i2c_port = 1,
+    .scl_io_num = GPIO_NUM_7,
+    .sda_io_num = GPIO_NUM_6,
+    .glitch_ignore_cnt = 7,
+    .flags.enable_internal_pullup = false,
+};
+
+i2c_config_t conf = {
+    .mode = I2C_MODE_MASTER,
+    .sda_io_num = GPIO_NUM_6,
+    .sda_pullup_en = GPIO_PULLUP_DISABLE,
+    .scl_io_num = GPIO_NUM_7,
+    .scl_pullup_en = GPIO_PULLUP_DISABLE,
+    .master.clk_speed = 400000,
+};
+
+SSD1306_t dev;
+i2c_master_bus_handle_t i2c0_bus;
+i2c_bus_device_handle_t i2c0_device1;
+i2c_bus_device_handle_t i2c0_device2;
+i2c_master_dev_handle_t buzzer_dev;
 
 static volatile int64_t last_interrupt_time = 0;
 
@@ -139,14 +170,14 @@ esp_err_t custom_prov_data_handler(uint32_t session_id, const uint8_t *inbuf, ss
 void init_task() {
 
     ColorRGB color = {
-        .red = 50,
-        .green = 50,
+        .red = 0,
+        .green = 0,
         .blue = 50
     };
 
     ESP_LOGI(TAG, "Init task start!");
     while(initializing && !factoryResetStarted) {
-        led_strip_idle_rotating_animation_iteration(&led_strip, color, 1);
+        led_strip_idle_rotating_animation_iteration(&led_strip, color, 1, 1);
         vTaskDelay(pdMS_TO_TICKS(100));
     }
     led_strip_clear(led_strip);
@@ -204,6 +235,19 @@ void peripheral_initialization() {
     pump_init(&motor);
     pump_set_direction_clockwise();
     hcsr04_init();
+
+    // I2C setup
+    int center, top, bottom;
+    char lineChar[20];
+
+    i2c_master_init(&dev, CONFIG_SDA_GPIO, CONFIG_SCL_GPIO, CONFIG_RESET_GPIO);
+
+    init_display(&dev);
+    i2c_master_bus_handle_t i2c0_bus = dev._i2c_bus_handle;
+
+
+
+    welcome_screen(&dev);
 
     xMotorMutex = xSemaphoreCreateMutex();
 
@@ -355,7 +399,7 @@ void tag_pouring_task() {
     uint8_t uid_length;
 
     while(1) {
-        bool success = pn532_readPassiveTargetID(&pn532_dev, 0x00, uid, &uid_length, 10000);
+        bool success = pn532_readPassiveTargetID(&pn532_dev, 0x00, uid, &uid_length, 1000);
 
         if (success) {
             ESP_LOGI(TAG, "UID length: %d", uid_length);
@@ -364,13 +408,43 @@ void tag_pouring_task() {
 
         if(memcmp(uid, RFID_TAG, 7) == 0) {
             if(xSemaphoreTake(xMotorMutex, 100)) {
+                pump_status = WORKING;
                 ESP_LOGI(TAG, "Started pouring!");
-                // TODO add milliliters passing and signalization (display, lights, audio)
-                pump_pour_milliliters(&motor, 250.f);
+                // TODO add milliliters passing and signalization (display, audio)
+
+                const double time_us_d = (250.f / 24.16f) * 1000000.0;
+                const int64_t time_us = (int64_t)time_us_d;
+
+                ESP_LOGI(TAG, "Time int us: %lld", time_us);
+                led_strip_clear(led_strip);
+                pump_set_speed(&motor, 1.0f);
+                const int64_t start_time = esp_timer_get_time();
+                uint32_t led_idx = 0;
+                while(esp_timer_get_time() - start_time < time_us) {
+                    const double elapsed_time = (double)(esp_timer_get_time() - start_time)/1000000.0;
+                    led_idx = round((elapsed_time / (time_us_d / 1000000.0)) * (LED_STRIP_LED_NUM - 1));
+                    led_strip_set_pixel(led_strip, led_idx, 50, 50, 50);
+                    led_strip_refresh(led_strip);
+
+                    ESP_LOGI(TAG, "Elapsed time: %f", elapsed_time);
+                    vTaskDelay(pdMS_TO_TICKS(10));
+                }
+                pump_set_speed(&motor, 0.0f);
+                led_strip_clear(led_strip);
+
                 ESP_LOGI(TAG, "Ended pouring!");
                 xSemaphoreGive(xMotorMutex);
             }
             memset(uid, 0, sizeof(uint8_t)*7);
+
+            ColorRGB ready_color = {0, 100, 0};
+            led_strip_set_mono(&led_strip, ready_color);
+            ssd1306_clear_screen(&dev, false);
+            pouring_finished_screen(&dev);
+            vTaskDelay(pdMS_TO_TICKS(CUP_READY_DISPLAY_TIME_MS));
+            welcome_screen(&dev);
+            led_strip_clear(led_strip);
+            pump_status = IDLE;
         }
 
         vTaskDelay(pdMS_TO_TICKS(100));
@@ -378,21 +452,34 @@ void tag_pouring_task() {
 }
 
 void manual_pouring_task() {
+    ColorRGB color = {50, 50, 50};
     while(1) {
         int status = gpio_get_level(BTN_GPIO);
         if (status == 1) {
-            ESP_LOGI(TAG, "BTN pressed!!");
-            // TODO add signalization (display, lights, audio)
+            // TODO add signalization (display, audio)
             if(xSemaphoreTake(xMotorMutex, 100)) {
+                pump_status = WORKING;
                 ESP_LOGI(TAG, "Started pouring!");
+                led_strip_clear(led_strip);
                 pump_set_speed(&motor, 1.0f);
                 while(gpio_get_level(BTN_GPIO)) {
+                    led_strip_idle_rotating_animation_iteration(&led_strip, color, 1, 20);
                     vTaskDelay(pdMS_TO_TICKS(10));
                 }
                 pump_set_speed(&motor, 0.0f);
+                led_strip_clear(led_strip);
                 ESP_LOGI(TAG, "Ended pouring!");
                 xSemaphoreGive(xMotorMutex);
             }
+
+            ColorRGB ready_color = {0, 100, 0};
+            led_strip_set_mono(&led_strip, ready_color);
+            ssd1306_clear_screen(&dev, false);
+            pouring_finished_screen(&dev);
+            vTaskDelay(pdMS_TO_TICKS(CUP_READY_DISPLAY_TIME_MS));
+            welcome_screen(&dev);
+            led_strip_clear(led_strip);
+            pump_status = IDLE;
         }
 
         vTaskDelay(pdMS_TO_TICKS(100));
@@ -415,13 +502,19 @@ void factory_reset_task(){
         ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
         ESP_LOGI(TAG, "Factory reset started!");
 
+        ssd1306_clear_screen(&dev, false);
         led_strip_clear(led_strip);
         factoryResetStarted = true;
         int i = 0;
+        const int64_t start_time = esp_timer_get_time();
         last_interrupt_time = esp_timer_get_time();
         while(factoryResetStarted) {
             int64_t now = esp_timer_get_time();
-            if(now - last_interrupt_time > 625000) {
+
+            int64_t time_to_reset = FACTORY_RESET_TIME_US - (esp_timer_get_time() - start_time);
+            factory_reset_screen(&dev, (uint8_t)(time_to_reset / 1000000));
+
+            if(now - last_interrupt_time > FACTORY_RESET_TIME_US / LED_STRIP_LED_NUM) {
                 last_interrupt_time = now;
                 ++i;
             }
@@ -446,6 +539,7 @@ void factory_reset_task(){
             else {
                 factoryResetStarted = false;
                 led_strip_clear(led_strip);
+                welcome_screen(&dev);
                 ESP_LOGI(TAG, "Factory reset break!");
                 break;
             }
@@ -464,7 +558,6 @@ void app_main(void)
     wifi_setup();
 
     // Create tasks
-    //xTaskCreate(valve_task, "ValveTask", 2048, NULL, 1, &xValveHandle );
     const TickType_t xTimerPeriod = pdMS_TO_TICKS(200);
     xWaterLevelRegulator = xTimerCreate("WaterLevelRegulator", xTimerPeriod, pdTRUE, (void *)0, water_regulator_timer_task);
     xTaskCreate(factory_reset_task, "factoryResetTask", 4096, NULL, 5, &xFactoryResetTaskHandle);
