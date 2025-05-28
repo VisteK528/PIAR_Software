@@ -2,6 +2,11 @@
 #include "driver/gpio.h"
 #include "pump_control.h"
 
+#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+
 static const char *TAG = "PUMP";
 
 void pump_init(bdc_motor_handle_t* motor) {
@@ -39,13 +44,33 @@ void pump_set_direction_anticlockwise() {
 }
 
 void pump_set_speed(bdc_motor_handle_t* motor, float speed) {
-    bdc_motor_set_speed(*motor, (uint32_t)(speed*BDC_MCPWM_DUTY_TICK_MAX));
-    ESP_LOGI(TAG, "Pump direction set to anticlockwise");
+    if(speed <= 1.0f && speed >= 0.0f) {
+        bdc_motor_set_speed(*motor, (uint32_t)(speed*BDC_MCPWM_DUTY_TICK_MAX));
+        ESP_LOGI(TAG, "Pump speed set up");
+    }
 }
 
 void pump_stop() {
     gpio_set_level(PUMP_IN1_GPIO, 0);
     gpio_set_level(PUMP_IN2_GPIO, 0);
     ESP_LOGI(TAG, "Pump stop!");
+}
+
+void pump_pour_milliliters(bdc_motor_handle_t* motor, float milliliters) {
+    const double time_us_f = (milliliters / 24.16f) * 1000000.f;
+    ESP_LOGI(TAG, "Time float us: %f", time_us_f);
+
+    const int64_t time_us = (int64_t)time_us_f;
+
+    ESP_LOGI(TAG, "Time int us: %lld", time_us);
+
+
+    pump_set_speed(motor, 1.0f);
+    const int64_t start_time = esp_timer_get_time();
+    while(esp_timer_get_time() - start_time < time_us) {
+        ESP_LOGI(TAG, "Elapsed time: %f", (float)(esp_timer_get_time() - start_time)/1000000.f);
+        vTaskDelay(pdTICKS_TO_MS(10));
+    }
+    pump_set_speed(motor, 0.0f);
 }
 

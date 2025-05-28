@@ -5,6 +5,7 @@
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "esp_chip_info.h"
 #include "esp_flash.h"
 #include "esp_system.h"
@@ -30,6 +31,24 @@
 
 #include "pn532.h"
 
+// ======================================== Development purposes =======================================================
+
+const uint8_t RFID_TAG[7] = {29, 227, 38, 133, 3, 16, 128};
+
+// =====================================================================================================================
+
+// Water Regulator
+
+#define WATER_REGULATOR_DEBUG
+
+ValveStatus_t valve_status = CLOSED;
+const float WATER_Y_ZAD = 10.f;
+const float WATER_HYSTERESIS = 2.f;
+const float WATER_ALARM_LEVEL = 5.f;
+
+// Water dispenser
+PumpStatus_t pump_status = IDLE;
+
 
 #define GPIO_INPUT_IO       9
 #define GPIO_INPUT_PIN_SEL  (1ULL << GPIO_INPUT_IO)
@@ -40,16 +59,25 @@
 #define RFID1_SS            18
 #define RFID2_SS            19
 
-#define LD2 GPIO_NUM_1
+#define BTN_GPIO            GPIO_NUM_0
+#define LD2                 GPIO_NUM_1
 static volatile int led_enabled = 0;
 
 static const char *TAG = "DispenserSoft";
 
-TaskHandle_t xValveHandle = NULL;
+// Timer and Task handles
+TimerHandle_t xWaterLevelRegulator = NULL;
+
+TaskHandle_t xTagPourHandle = NULL;
+TaskHandle_t xManualPourHandle = NULL;
+
 TaskHandle_t xInitTaskHandle = NULL;
 TaskHandle_t xFactoryResetTaskHandle = NULL;
 
+// Other handles
+SemaphoreHandle_t xMotorMutex;
 
+// Device handles
 bdc_motor_handle_t motor;
 led_strip_handle_t led_strip;
 pn532_t pn532_dev;
@@ -177,10 +205,13 @@ void peripheral_initialization() {
     pump_set_direction_clockwise();
     hcsr04_init();
 
+    xMotorMutex = xSemaphoreCreateMutex();
+
+
     pn532_spi_init(&pn532_dev, SPI2_CLK, SPI2_MISO, SPI2_MOSI, RFID1_SS);
     pn532_begin(&pn532_dev);
-    uint32_t versiondata = pn532_getFirmwareVersion(&pn532_dev);
 
+    uint32_t versiondata = pn532_getFirmwareVersion(&pn532_dev);
     if (!versiondata)
     {
         while (1)
@@ -217,6 +248,10 @@ void peripheral_initialization() {
     gpio_install_isr_service(0);
 
     gpio_isr_handler_add(GPIO_INPUT_IO, gpio_isr_handler, (void*) GPIO_INPUT_IO);
+
+    // Manual btn setup
+    gpio_reset_pin(BTN_GPIO);
+    gpio_set_direction(BTN_GPIO, GPIO_INPUT_IO);
 
     // WiFi init
     ESP_ERROR_CHECK(nvs_flash_init());
@@ -278,14 +313,89 @@ void wifi_setup() {
     }
 }
 
-void valve_task() {
+void water_regulator_timer_task(TimerHandle_t xTimer) {
+    float distance = hcsr04_read_distance_cm();
+
+    if(distance < 0) {
+        ESP_LOGE(TAG, "Water level sensor error!");
+        valve_close();
+        valve_status = CLOSED;
+    }
+    else {
+        #ifdef WATER_REGULATOR_DEBUG
+                ESP_LOGI(TAG, "Distance: %.4f", distance);
+        #endif
+
+
+        if(distance < WATER_ALARM_LEVEL) {
+            valve_close();
+            valve_status = CLOSED;
+            ESP_LOGW(TAG, "Water level too high!!!");
+        }
+
+        if(pump_status != WORKING) {
+            if(distance > WATER_Y_ZAD + WATER_HYSTERESIS / 2 && valve_status == CLOSED) {
+                gpio_set_level(LD2, 0);
+                valve_open();
+                valve_status = OPEN;
+            }
+            else if (distance < WATER_Y_ZAD - WATER_HYSTERESIS / 2 && valve_status == OPEN) {
+                gpio_set_level(LD2, 1);
+                valve_close();
+                valve_status = CLOSED;
+            }
+        }
+    }
+
+
+}
+
+void tag_pouring_task() {
+    uint8_t uid[7];
+    uint8_t uid_length;
 
     while(1) {
-        gpio_set_level(LD2, 0);
-        vTaskDelay(pdMS_TO_TICKS(500));
-        gpio_set_level(LD2, 1);
-        vTaskDelay(pdMS_TO_TICKS(500));
+        bool success = pn532_readPassiveTargetID(&pn532_dev, 0x00, uid, &uid_length, 10000);
 
+        if (success) {
+            ESP_LOGI(TAG, "UID length: %d", uid_length);
+            ESP_LOGI(TAG, "UID: %d:%d:%d:%d:%d:%d:%d", uid[0],uid[1], uid[2], uid[3], uid[4], uid[5], uid[6]);
+        }
+
+        if(memcmp(uid, RFID_TAG, 7) == 0) {
+            if(xSemaphoreTake(xMotorMutex, 100)) {
+                ESP_LOGI(TAG, "Started pouring!");
+                // TODO add milliliters passing and signalization (display, lights, audio)
+                pump_pour_milliliters(&motor, 250.f);
+                ESP_LOGI(TAG, "Ended pouring!");
+                xSemaphoreGive(xMotorMutex);
+            }
+            memset(uid, 0, sizeof(uint8_t)*7);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+
+void manual_pouring_task() {
+    while(1) {
+        int status = gpio_get_level(BTN_GPIO);
+        if (status == 1) {
+            ESP_LOGI(TAG, "BTN pressed!!");
+            // TODO add signalization (display, lights, audio)
+            if(xSemaphoreTake(xMotorMutex, 100)) {
+                ESP_LOGI(TAG, "Started pouring!");
+                pump_set_speed(&motor, 1.0f);
+                while(gpio_get_level(BTN_GPIO)) {
+                    vTaskDelay(pdMS_TO_TICKS(10));
+                }
+                pump_set_speed(&motor, 0.0f);
+                ESP_LOGI(TAG, "Ended pouring!");
+                xSemaphoreGive(xMotorMutex);
+            }
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
@@ -354,44 +464,17 @@ void app_main(void)
     wifi_setup();
 
     // Create tasks
-    xTaskCreate(valve_task, "ValveTask", 2048, NULL, 1, &xValveHandle );
+    //xTaskCreate(valve_task, "ValveTask", 2048, NULL, 1, &xValveHandle );
+    const TickType_t xTimerPeriod = pdMS_TO_TICKS(200);
+    xWaterLevelRegulator = xTimerCreate("WaterLevelRegulator", xTimerPeriod, pdTRUE, (void *)0, water_regulator_timer_task);
     xTaskCreate(factory_reset_task, "factoryResetTask", 4096, NULL, 5, &xFactoryResetTaskHandle);
 
+    xTaskCreate(tag_pouring_task, "tagPouringTask", 4096, NULL, 4, &xTagPourHandle);
+    xTaskCreate(manual_pouring_task, "manualPouringTask", 4096, NULL, 4, &xManualPourHandle);
 
+    xTimerStart(xWaterLevelRegulator, 0);
 
-    uint8_t uid[8];
-    uint8_t uid_length;
-
-    float distance = 0.0f;
     while(1) {
-        bool success = pn532_readPassiveTargetID(&pn532_dev, 0x00, uid, &uid_length, 10000);
-
-        if (success) {
-            ESP_LOGI(TAG, "UID length: %d", uid_length);
-            ESP_LOGI(TAG, "UID: %d:%d:%d:%d:%d:%d:%d", uid[0],uid[1], uid[2], uid[3], uid[4], uid[5], uid[6]);
-        }
-
-        // distance = hcsr04_read_distance_cm();
-        // ESP_LOGI(TAG, "Measured distance: %f", distance);
-        //vTaskDelay(pdMS_TO_TICKS(1000));
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
-
-    // while (1) {
-    //     if (led_on_off) {
-    //         /* Set the LED pixel using RGB from 0 (0%) to 255 (100%) for each color */
-    //         for (int i = 0; i < LED_STRIP_LED_NUMBERS; i++) {
-    //             ESP_ERROR_CHECK(led_strip_set_pixel(led_strip, i, 5, 5, 5));
-    //         }
-    //         /* Refresh the strip to send data */
-    //         ESP_ERROR_CHECK(led_strip_refresh(led_strip));
-    //         ESP_LOGI(TAG, "LED ON!");
-    //     } else {
-    //         /* Set all LED off to clear all pixels */
-    //         ESP_ERROR_CHECK(led_strip_clear(led_strip));
-    //         ESP_LOGI(TAG, "LED OFF!");
-    //     }
-    //
-    //     led_on_off = !led_on_off;
-    //     vTaskDelay(pdMS_TO_TICKS(500));
-    // }
 }
