@@ -13,4 +13,6 @@ idf_component_register(SRCS "main.c" ${SOURCES}
             esp_driver_gpio
             led_strip
             app_update
+            esp_system
+            pn532
         INCLUDE_DIRS "include")
