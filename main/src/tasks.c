@@ -11,6 +11,7 @@
 #include "esp_timer.h"
 #include "memory.h"
 #include "wifi_provisioning/manager.h"
+#include "esp_http_client.h"
 
 #include "tasks.h"
 #include "valve_control.h"
@@ -23,6 +24,8 @@
 #include "ws2812_led_strip.h"
 #include "display_functions.h"
 #include "pn532.h"
+#include "api_requests.h"
+
 
 extern pn532_t pn532_dev;
 
@@ -73,56 +76,85 @@ void tag_pouring_task() {
     uint8_t uid[7];
     uint8_t uid_length;
 
+    char* rfid_tag = "29:227:38:133:3:16:128";
+
     while(1) {
+        // TODO Change to simple isTagPresent(), without checking UID
         bool success = pn532_readPassiveTargetID(&pn532_dev, 0x00, uid, &uid_length, 1000);
 
         if (success) {
             ESP_LOGI(TAG, "UID length: %d", uid_length);
-            ESP_LOGI(TAG, "UID: %d:%d:%d:%d:%d:%d:%d", uid[0],uid[1], uid[2], uid[3], uid[4], uid[5], uid[6]);
-        }
+            ESP_LOGI(TAG, "UID: %02X:%02X:%02X:%02X:%02X:%02X:%02X",
+                     uid[0], uid[1], uid[2], uid[3], uid[4], uid[5], uid[6]);
 
-        if(memcmp(uid, RFID_TAG, 7) == 0) {
-            if(xSemaphoreTake(xMotorMutex, 100)) {
-                pump_status = WORKING;
-                ESP_LOGI(TAG, "Started pouring!");
-                // TODO add milliliters passing and signalization (display, audio)
+            // TODO Get info about UID and milliliters
 
-                const double time_us_d = (250.f / 24.16f) * 1000000.0;
-                const int64_t time_us = (int64_t)time_us_d;
-
-                ESP_LOGI(TAG, "Time int us: %lld", time_us);
-                led_strip_clear(led_strip);
-                pump_set_speed(&motor, 1.0f);
-                const int64_t start_time = esp_timer_get_time();
-                uint32_t led_idx = 0;
-                while(esp_timer_get_time() - start_time < time_us) {
-                    const double elapsed_time = (double)(esp_timer_get_time() - start_time)/1000000.0;
-                    led_idx = round((elapsed_time / (time_us_d / 1000000.0)) * (LED_STRIP_LED_NUM - 1));
-                    led_strip_set_pixel(led_strip, led_idx, 50, 50, 50);
-                    led_strip_refresh(led_strip);
-
-                    ESP_LOGI(TAG, "Elapsed time: %f", elapsed_time);
-                    vTaskDelay(pdMS_TO_TICKS(10));
+            // TODO Check if reading 4 pages at the time is possible. If so then create new function read4Pages
+            // and another function with reads the whole tag memory
+            uint8_t buffer[4];
+            for (uint8_t page = 4; page < 39; page++) {
+                if (pn532_ntag2xx_ReadPage(&pn532_dev, page, buffer) == 1) {
+                    ESP_LOGI(TAG, "Page %d: %02X %02X %02X %02X | '%c' '%c' '%c' '%c'",
+                     page,
+                     buffer[0], buffer[1], buffer[2], buffer[3],
+                     (buffer[0] >= 32 && buffer[0] <= 126) ? buffer[0] : '.',
+                     (buffer[1] >= 32 && buffer[1] <= 126) ? buffer[1] : '.',
+                     (buffer[2] >= 32 && buffer[2] <= 126) ? buffer[2] : '.',
+                     (buffer[3] >= 32 && buffer[3] <= 126) ? buffer[3] : '.');
+                } else {
+                    ESP_LOGE(TAG, "Failed to read page %d", page);
                 }
-                pump_set_speed(&motor, 0.0f);
-                led_strip_clear(led_strip);
-
-                ESP_LOGI(TAG, "Ended pouring!");
-                xSemaphoreGive(xMotorMutex);
             }
-            memset(uid, 0, sizeof(uint8_t)*7);
-
-            ColorRGB ready_color = {0, 100, 0};
-            led_strip_set_mono(&led_strip, ready_color);
-            ssd1306_clear_screen(&dev, false);
-            pouring_finished_screen(&dev);
-            vTaskDelay(pdMS_TO_TICKS(CUP_READY_DISPLAY_TIME_MS));
-            welcome_screen(&dev);
-            led_strip_clear(led_strip);
-            pump_status = IDLE;
+            vTaskDelay(pdMS_TO_TICKS(1000));
         }
 
-        vTaskDelay(pdMS_TO_TICKS(100));
+
+        // TODO uncomment when TAG related work is ended and then integrate
+        // if(memcmp(uid, RFID_TAG, 7) == 0) {
+        //     if(xSemaphoreTake(xMotorMutex, 100)) {
+        //         pump_status = WORKING;
+        //         ESP_LOGI(TAG, "Started pouring!");
+        //         // TODO add milliliters passing and signalization (audio)
+        //
+        //         const double time_us_d = (250.f / 24.16f) * 1000000.0;
+        //         const int64_t time_us = (int64_t)time_us_d;
+        //
+        //         ESP_LOGI(TAG, "Time int us: %lld", time_us);
+        //         led_strip_clear(led_strip);
+        //         pump_set_speed(&motor, 1.0f);
+        //         const int64_t start_time = esp_timer_get_time();
+        //         uint32_t led_idx = 0;
+        //         while(esp_timer_get_time() - start_time < time_us) {
+        //             const double elapsed_time = (double)(esp_timer_get_time() - start_time)/1000000.0;
+        //             led_idx = round((elapsed_time / (time_us_d / 1000000.0)) * (LED_STRIP_LED_NUM - 1));
+        //             led_strip_set_pixel(led_strip, led_idx, 50, 50, 50);
+        //             led_strip_refresh(led_strip);
+        //
+        //             ESP_LOGI(TAG, "Elapsed time: %f", elapsed_time);
+        //             vTaskDelay(pdMS_TO_TICKS(10));
+        //         }
+        //         pump_set_speed(&motor, 0.0f);
+        //         led_strip_clear(led_strip);
+        //
+        //         ESP_LOGI(TAG, "Ended pouring!");
+        //         xSemaphoreGive(xMotorMutex);
+        //     }
+        //
+        //     ColorRGB ready_color = {0, 100, 0};
+        //     led_strip_set_mono(&led_strip, ready_color);
+        //     ssd1306_clear_screen(&dev, false);
+        //     pouring_finished_screen(&dev);
+        //
+        //     post_tag_record(uid, 250);
+        //     memset(uid, 0, sizeof(uint8_t)*7);
+        //
+        //     vTaskDelay(pdMS_TO_TICKS(CUP_READY_DISPLAY_TIME_MS));
+        //     welcome_screen(&dev);
+        //     led_strip_clear(led_strip);
+        //     pump_status = IDLE;
+        // }
+
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 

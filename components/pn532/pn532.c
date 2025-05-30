@@ -1066,7 +1066,7 @@ uint8_t pn532_ntag2xx_ReadPage(pn532_t *obj, uint8_t page, uint8_t *buffer)
     pn532_packetbuffer[3] = page;            /* Page Number (0..63 in most cases) */
 
     /* Send the command */
-    if (!pn532_sendCommandCheckAck(obj, pn532_packetbuffer, 4, 1000))
+    if (!pn532_sendCommandCheckAck(obj, pn532_packetbuffer, 4, 200))
     {
         MIFARE_DEBUG("Failed to receive ACK for write command\n");
         return 0;
@@ -1344,13 +1344,13 @@ bool pn532_waitready(pn532_t *obj, uint16_t timeout)
 void pn532_readdata(pn532_t *obj, uint8_t *buff, uint8_t n)
 {
     gpio_set_level(obj->_ss, 0);
-    PN532_DELAY(10);
+    PN532_DELAY(5);
     pn532_spi_write(obj, PN532_SPI_DATAREAD);
 
     PN532_DEBUG("Reading:");
     for (uint8_t i = 0; i < n; i++)
     {
-        PN532_DELAY(10);
+        PN532_DELAY(2);
         buff[i] = pn532_spi_read(obj);
     }
     for (int i = 0; i < n; i++)

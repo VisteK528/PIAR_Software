@@ -102,7 +102,6 @@ static void event_handler(void* arg, esp_event_base_t event_base,
             case WIFI_PROV_END:
                 ESP_LOGI(TAG, "Provisioning deinitialized!  ");
                 initializing = false;
-                wifi_prov_mgr_deinit();
                 break;
             default:
                 break;
@@ -125,9 +124,6 @@ void peripheral_initialization() {
     hcsr04_init();
 
     // I2C setup
-    int center, top, bottom;
-    char lineChar[20];
-
     i2c_master_init(&dev, CONFIG_SDA_GPIO, CONFIG_SCL_GPIO, CONFIG_RESET_GPIO);
 
     init_display(&dev);
@@ -232,6 +228,7 @@ void wifi_setup() {
         ESP_ERROR_CHECK(wifi_prov_mgr_start_provisioning(WIFI_PROV_SECURITY_1, pop, service_name, NULL));
         wifi_prov_mgr_endpoint_register("API-token-endpoint", custom_prov_data_handler, NULL);
         wifi_prov_mgr_wait();
+        wifi_prov_mgr_deinit();
 
 
     } else {
