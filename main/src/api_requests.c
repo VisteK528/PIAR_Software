@@ -23,7 +23,7 @@ static void format_bytes(const uint8_t *data, size_t len, char *out_str, size_t 
              data[3], data[4], data[5], data[6]);
 }
 
-void post_tag_record(uint8_t* tag, int milliliters) {
+int post_tag_record(uint8_t* tag, int milliliters) {
 
     char tag_id[20];
     format_bytes(tag, 7, tag_id, 32);
@@ -45,13 +45,15 @@ void post_tag_record(uint8_t* tag, int milliliters) {
     esp_http_client_set_post_field(client, json_payload, strlen(json_payload));
 
     esp_err_t err = esp_http_client_perform(client);
+    int https_status = esp_http_client_get_status_code(client);
     if (err == ESP_OK) {
         ESP_LOGI(TAG, "HTTPS Status = %d, content_length = %d",
-                 esp_http_client_get_status_code(client),
+                 https_status,
                  esp_http_client_get_content_length(client));
     } else {
         ESP_LOGE(TAG, "HTTP request failed: %s", esp_err_to_name(err));
     }
 
     esp_http_client_cleanup(client);
+    return https_status;
 }

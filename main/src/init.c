@@ -1,5 +1,6 @@
 #include <string.h>
 
+#include "buzzer_i2c.h"
 #include "setup.h"
 #include "hc_sr04.h"
 #include "display_functions.h"
@@ -129,10 +130,7 @@ void peripheral_initialization() {
     init_display(&dev);
     i2c_master_bus_handle_t i2c0_bus = dev._i2c_bus_handle;
 
-
-
-    welcome_screen(&dev);
-
+    buzzer_init(&i2c0_bus, &buzzer_dev);
     xMotorMutex = xSemaphoreCreateMutex();
 
 
@@ -192,6 +190,7 @@ void peripheral_initialization() {
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_PROV_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
 
+    welcome_screen(&dev);
 }
 
 

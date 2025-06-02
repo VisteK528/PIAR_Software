@@ -137,6 +137,15 @@ typedef struct {
 
 } pn532_t;
 
+#define NTAG213_UID_LENGTH_BYTES    7
+#define NTAG213_MAX_PAGES           39
+#define NTAG213_BYES_PER_PAGE       4
+
+typedef struct {
+    uint8_t uid[NTAG213_UID_LENGTH_BYTES];
+    uint8_t data[NTAG213_BYES_PER_PAGE * NTAG213_MAX_PAGES];
+} Ntag213_t;
+
 void pn532_spi_init(pn532_t *obj, uint8_t clk, uint8_t miso, uint8_t mosi, uint8_t ss);
 void pn532_begin(pn532_t *obj);
 uint32_t pn532_getFirmwareVersion(pn532_t *obj);
@@ -164,6 +173,8 @@ uint8_t pn532_AsTarget(pn532_t *obj);
 uint8_t pn532_getDataTarget(pn532_t *obj, uint8_t *cmd, uint8_t *cmdlen);
 uint8_t pn532_setDataTarget(pn532_t *obj, uint8_t *cmd, uint8_t cmdlen);
 
+uint8_t pn532_ntag2xx_Read4Pages(pn532_t *obj, uint8_t page, uint8_t *buffer);
+uint8_t read_ntag213_data(pn532_t *obj, Ntag213_t* handle);
 #ifdef __cplusplus
 }
 #endif

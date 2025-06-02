@@ -1114,6 +1114,90 @@ uint8_t pn532_ntag2xx_ReadPage(pn532_t *obj, uint8_t page, uint8_t *buffer)
     return 1;
 }
 
+uint8_t pn532_ntag2xx_Read4Pages(pn532_t *obj, uint8_t page, uint8_t *buffer) {
+    if (page >= 231)
+    {
+        MIFARE_DEBUG("Page value out of range\n");
+        return 0;
+    }
+
+    MIFARE_DEBUG("Reading page %d\n", page);
+
+    /* Prepare the command */
+    pn532_packetbuffer[0] = PN532_COMMAND_INDATAEXCHANGE;
+    pn532_packetbuffer[1] = 1;               /* Card number */
+    pn532_packetbuffer[2] = MIFARE_CMD_READ; /* Mifare Read command = 0x30 */
+    pn532_packetbuffer[3] = page;            /* Page Number (0..63 in most cases) */
+
+    /* Send the command */
+    if (!pn532_sendCommandCheckAck(obj, pn532_packetbuffer, 4, 200))
+    {
+        MIFARE_DEBUG("Failed to receive ACK for write command\n");
+        return 0;
+    }
+
+    /* Read the response packet */
+    pn532_readdata(obj, pn532_packetbuffer, 26);
+    MIFARE_DEBUG("Received:");
+    for (int i = 0; i < 26; i++)
+    {
+        MIFARE_DEBUG(" %02x", pn532_packetbuffer[i]);
+    }
+    MIFARE_DEBUG("\n");
+
+    /* If uint8_t 8 isn't 0x00 we probably have an error */
+    if (pn532_packetbuffer[7] == 0x00)
+    {
+        /* Copy the 4 data bytes to the output buffer         */
+        /* Block content starts at uint8_t 9 of a valid response */
+        /* Note that the command actually reads 16 uint8_t or 4  */
+        /* pages at a time ... we simply discard the last 12  */
+        /* bytes                                              */
+        memcpy(buffer, pn532_packetbuffer + 8, 16);
+    }
+    else
+    {
+        MIFARE_DEBUG("Unexpected response reading block:");
+        for (int i = 0; i < 26; i++)
+        {
+            MIFARE_DEBUG(" %02x", pn532_packetbuffer[i]);
+        }
+        MIFARE_DEBUG("\n");
+        return 0;
+    }
+
+/* Display data for debug if requested */
+    MIFARE_DEBUG("Page %d:", page);
+    for (int i = 0; i < 4; i++)
+    {
+        MIFARE_DEBUG(" %02x", buffer[i]);
+    }
+    MIFARE_DEBUG("\n");
+
+    // Return OK signal
+    return 1;
+}
+
+uint8_t read_ntag213_data(pn532_t *obj, Ntag213_t* handle) {
+    for (uint8_t i = 0; i < 9; i++) {
+        uint8_t page = i * 4;
+        uint8_t buffer[16];
+        if(pn532_ntag2xx_Read4Pages(obj, page, buffer) == 1) {
+            if(i == 0) {
+                memcpy(handle->uid, buffer, 3);
+                memcpy(handle->uid+3, buffer+4, 4);
+            }
+            else {
+                memcpy(handle->data + (i-1) * 16, buffer, 16);
+            }
+        }
+        else {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 /**************************************************************************/
 /*!
     Tries to write an entire 4-uint8_t page at the specified block

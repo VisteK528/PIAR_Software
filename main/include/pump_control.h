@@ -17,10 +17,6 @@
 #define PUMP_IN1_GPIO                   4
 #define PUMP_IN2_GPIO                   5
 
-// TODO ajdust flow ratio
-#define PUMP_MILLILITERS_PER_SECOND     24.16f
-
-
 typedef enum {
     IDLE = 0,
     WORKING = 1
