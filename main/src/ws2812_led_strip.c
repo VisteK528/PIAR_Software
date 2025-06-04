@@ -60,32 +60,28 @@ void led_strip_idle_rotating_animation_blocking(led_strip_handle_t* handle, Colo
     }
 }
 
-void led_strip_idle_rotating_animation_iteration(led_strip_handle_t* handle, ColorRGB color, uint8_t clockwise, uint32_t time_scaling) {
-    static int i = 0;
-    static int j = -1;
-
-    if (j == -1) {
-        j = time_scaling * LED_STRIP_LED_NUM / 2;
+void led_strip_idle_rotating_animation_iteration(led_strip_handle_t* handle, ColorRGB color, uint8_t clockwise, uint32_t time_scaling, animation_state_t *state) {
+    if (state->j == -1) {
+        state->j = time_scaling * LED_STRIP_LED_NUM / 2;
     }
 
     ESP_ERROR_CHECK(led_strip_clear(*handle));
-    ESP_ERROR_CHECK(led_strip_set_pixel(*handle, i / time_scaling, color.red, color.green, color.blue));
-    ESP_ERROR_CHECK(led_strip_set_pixel(*handle, j / time_scaling, color.red, color.green, color.blue));
+    ESP_ERROR_CHECK(led_strip_set_pixel(*handle, state->i / time_scaling, color.red, color.green, color.blue));
+    ESP_ERROR_CHECK(led_strip_set_pixel(*handle, state->j / time_scaling, color.red, color.green, color.blue));
     led_strip_refresh(*handle);
 
     if(clockwise == 1) {
-        ++i;
-        ++j;
-        if(i > LED_STRIP_LED_NUM * time_scaling - 1)  i = 0;
-        if(j > LED_STRIP_LED_NUM * time_scaling - 1)  j = 0;
+        ++state->i;
+        ++state->j;
+        if(state->i > LED_STRIP_LED_NUM * time_scaling - 1)  state->i = 0;
+        if(state->j > LED_STRIP_LED_NUM * time_scaling - 1)  state->j = 0;
     }
     else {
-        --i;
-        --j;
-        if(i < 0)  i = LED_STRIP_LED_NUM * time_scaling - 1;
-        if(j < 0)  j = LED_STRIP_LED_NUM * time_scaling - 1;
+        --state->i;
+        --state->j;
+        if(state->i < 0)  state->i = LED_STRIP_LED_NUM * time_scaling - 1;
+        if(state->j < 0)  state->j = LED_STRIP_LED_NUM * time_scaling - 1;
     }
-
 }
 
 void led_strip_idle_breathing_animation_blocking(led_strip_handle_t* handle, ColorRGB color, uint8_t update_period_ms) {

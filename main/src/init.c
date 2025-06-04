@@ -18,12 +18,13 @@
 #include "nvs_flash.h"
 
 
-extern TaskHandle_t xInitTaskHandle;
-extern TaskHandle_t xFactoryResetTaskHandle;
 extern pn532_t pn532_dev;
 
 static volatile int led_enabled = 0;
 static volatile int64_t last_interrupt_time = 0;
+
+#define WIFI_MAX_RETRY 15
+static int s_retry_num = 0;
 
 static void IRAM_ATTR gpio_isr_handler(void* arg)
 {
@@ -59,17 +60,27 @@ static void IRAM_ATTR gpio_isr_handler(void* arg)
 static esp_err_t custom_prov_data_handler(uint32_t session_id, const uint8_t *inbuf, ssize_t inlen,
                                           uint8_t **outbuf, ssize_t *outlen, void *priv_data)
 {
-    if (inbuf) {
-        ESP_LOGI(TAG, "Received data: %.*s", inlen, (char *)inbuf);
+    const char *TAG = "CUSTOM_PROV";
+
+    if (inbuf && inlen > 0) {
+        // Print incoming data as string and hex
+        ESP_LOGI(TAG, "Received data (len=%d): %.*s", (int)inlen, (int)inlen, (const char *)inbuf);
+        ESP_LOG_BUFFER_HEXDUMP(TAG, inbuf, inlen, ESP_LOG_INFO);
+    } else {
+        ESP_LOGW(TAG, "Received empty or null data");
     }
-    char response[] = "SUCCESS";
-    *outbuf = (uint8_t *)strdup(response);
+
+    // Prepare response message
+    const char *response = "SUCCESS";
+    *outlen = strlen(response) + 1;
+
+    *outbuf = malloc(*outlen);
     if (*outbuf == NULL) {
-        ESP_LOGE(TAG, "System out of memory");
+        ESP_LOGE(TAG, "Out of memory while allocating response buffer");
         return ESP_ERR_NO_MEM;
     }
-    *outlen = strlen(response) + 1; /* +1 for NULL terminating byte */
 
+    memcpy(*outbuf, response, *outlen);
     return ESP_OK;
 }
 
@@ -110,14 +121,61 @@ static void event_handler(void* arg, esp_event_base_t event_base,
     }
 }
 
+static void wifi_event_handler(void* arg, esp_event_base_t event_base,
+                               int32_t event_id, void* event_data) {
+    if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+        if (s_retry_num < WIFI_MAX_RETRY) {
+            if(s_retry_num == 0) {
+                ssd1306_clear_screen(&dev, false);
+            }
+            s_retry_num++;
+            ESP_LOGW("WIFI", "Retrying to connect to the AP (attempt %d)...", s_retry_num);
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            esp_wifi_connect();
+
+            wifi_connection_attempt_screen(&dev, s_retry_num, WIFI_MAX_RETRY);
+
+        } else {
+            ESP_LOGE("WIFI", "Failed to connect to the AP after %d attempts", WIFI_MAX_RETRY);
+
+            ColorRGB color ={
+                .red = 50,
+                .green = 0,
+                .blue = 0
+            };
+
+            led_strip_set_mono(&led_strip, color);
+            ssd1306_clear_screen(&dev, false);
+            failed_to_connect_to_wifi_screen(&dev);
+            buzzer_error_signal(&buzzer_dev);
+        }
+    } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
+        ESP_LOGI("WIFI", "Got IP: " IPSTR, IP2STR(&event->ip_info.ip));
+        s_retry_num = 0;
+        initializing = false;
+
+        if(startup) {
+            const TickType_t xTimerPeriod = pdMS_TO_TICKS(200);
+            xWaterLevelRegulator = xTimerCreate("WaterLevelRegulator", xTimerPeriod, pdTRUE, (void *)0, water_regulator_timer_task);
+            xTaskCreate(factory_reset_task, "factoryResetTask", 4096, NULL, 6, &xFactoryResetTaskHandle);
+
+            xTaskCreate(tag_pouring_task, "tagPouringTask", 4096, NULL, 4, &xTagPourHandle);
+            xTaskCreate(manual_pouring_task, "manualPouringTask", 4096, NULL, 4, &xManualPourHandle);
+            xTaskCreate(valid_water_level_task, "validWaterLevelTask", 4096, NULL, 5, &xValidWaterLevelTask);
+
+            xTimerStart(xWaterLevelRegulator, 0);
+            startup = false;
+        }
+
+        ssd1306_clear_screen(&dev, false);
+        welcome_screen(&dev);
+    }
+}
+
 
 void peripheral_initialization() {
     led_strip_init(&led_strip);
-    ColorRGB color = {
-        .red = 50,
-        .green = 50,
-        .blue = 0
-    };
 
     valve_init();
     pump_init(&motor);
@@ -190,7 +248,22 @@ void peripheral_initialization() {
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_PROV_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
 
-    welcome_screen(&dev);
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_PROV_EVENT,
+                                                        ESP_EVENT_ANY_ID,
+                                                        &event_handler,
+                                                        NULL,
+                                                        NULL));
+
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
+                                                        ESP_EVENT_ANY_ID,
+                                                        &wifi_event_handler,
+                                                        NULL,
+                                                        NULL));
+    ESP_ERROR_CHECK(esp_event_handler_instance_register(IP_EVENT,
+                                                        IP_EVENT_STA_GOT_IP,
+                                                        &wifi_event_handler,
+                                                        NULL,
+                                                        NULL));
 }
 
 
@@ -223,10 +296,13 @@ void wifi_setup() {
         uint8_t eth_mac[6];
         esp_read_mac(eth_mac, ESP_MAC_WIFI_STA);
         snprintf(service_name, sizeof(service_name), "WATER_DISP-%02X%02X", eth_mac[4], eth_mac[5]);
-
+        wifi_prov_mgr_disable_auto_stop(1000);
         ESP_ERROR_CHECK(wifi_prov_mgr_start_provisioning(WIFI_PROV_SECURITY_1, pop, service_name, NULL));
         wifi_prov_mgr_endpoint_register("API-token-endpoint", custom_prov_data_handler, NULL);
+
         wifi_prov_mgr_wait();
+
+        wifi_prov_mgr_endpoint_unregister("API-token-endpoint");
         wifi_prov_mgr_deinit();
 
 

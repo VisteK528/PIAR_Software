@@ -34,6 +34,7 @@ PumpStatus_t pump_status = IDLE;
 
 // Timer and Task handles
 TimerHandle_t xWaterLevelRegulator = NULL;
+TaskHandle_t xValidWaterLevelTask = NULL;
 
 TaskHandle_t xTagPourHandle = NULL;
 TaskHandle_t xManualPourHandle = NULL;
@@ -49,7 +50,9 @@ bdc_motor_handle_t motor;
 led_strip_handle_t led_strip;
 pn532_t pn532_dev;
 bool initializing = true;
+bool startup = true;
 bool factoryResetStarted = false;
+bool validWaterLevel = true;
 
 // I2C setup
 i2c_master_bus_config_t i2c_mst_config = {
@@ -81,16 +84,6 @@ void app_main(void)
 {
     peripheral_initialization();
     wifi_setup();
-
-    // Create tasks
-    const TickType_t xTimerPeriod = pdMS_TO_TICKS(200);
-    xWaterLevelRegulator = xTimerCreate("WaterLevelRegulator", xTimerPeriod, pdTRUE, (void *)0, water_regulator_timer_task);
-    xTaskCreate(factory_reset_task, "factoryResetTask", 4096, NULL, 5, &xFactoryResetTaskHandle);
-
-    xTaskCreate(tag_pouring_task, "tagPouringTask", 4096, NULL, 4, &xTagPourHandle);
-    xTaskCreate(manual_pouring_task, "manualPouringTask", 4096, NULL, 4, &xManualPourHandle);
-
-    xTimerStart(xWaterLevelRegulator, 0);
 
     while(1) {
         vTaskDelay(pdMS_TO_TICKS(100));

@@ -29,3 +29,11 @@ void buzzer_pouring_finished_signal(i2c_master_dev_handle_t* buzzer_dev) {
     vTaskDelay(pdMS_TO_TICKS(500));
 
 }
+
+void buzzer_error_signal(i2c_master_dev_handle_t* buzzer_dev) {
+    buzzer_signal(buzzer_dev, 100, 2, 10);
+}
+
+void buzzer_warning_signal(i2c_master_dev_handle_t* buzzer_dev) {
+    buzzer_signal(buzzer_dev, 100, 2, 5);
+}

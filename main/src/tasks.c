@@ -25,9 +25,15 @@
 #include "api_requests.h"
 #include "buzzer_i2c.h"
 
+#define FILTER_WINDOW_SIZE 11
+#define OUTLIER_THRESHOLD 3.5
 
 extern pn532_t pn532_dev;
 
+static float distance_buffer[FILTER_WINDOW_SIZE];
+static int buffer_index = 0;
+static int buffer_filled = 0;
+static float last_valid_distance = 0;
 
 static void extract_data_from_tag(uint8_t* buffer, uint8_t* uid, uint16_t* ml) {
     for(int i = 0; i < 7; i++) {
@@ -47,37 +53,120 @@ static void factory_reset() {
 }
 
 
-void water_regulator_timer_task(TimerHandle_t xTimer) {
-    const float distance = hcsr04_read_distance_cm();
+static int compare_floats(const void* a, const void* b) {
+    float fa = *(const float*)a;
+    float fb = *(const float*)b;
+    return (fa > fb) - (fa < fb);
+}
 
-    if(distance < 0) {
+static float median(float* arr, int size) {
+    float temp[FILTER_WINDOW_SIZE];
+    for (int i = 0; i < size; i++) temp[i] = arr[i];
+    qsort(temp, size, sizeof(float), compare_floats);
+    return temp[size / 2];
+}
+
+static float mad(float* arr, int size, float med) {
+    float deviations[FILTER_WINDOW_SIZE];
+    for (int i = 0; i < size; i++) deviations[i] = fabsf(arr[i] - med);
+    return median(deviations, size);
+}
+
+static bool filter_distance(float raw, float* filtered_out) {
+    distance_buffer[buffer_index] = raw;
+    buffer_index = (buffer_index + 1) % FILTER_WINDOW_SIZE;
+    if (buffer_filled < FILTER_WINDOW_SIZE) buffer_filled++;
+
+    if (buffer_filled < FILTER_WINDOW_SIZE) {
+        *filtered_out = raw;
+        return true;
+    }
+
+    float med = median(distance_buffer, FILTER_WINDOW_SIZE);
+    float mad_val = mad(distance_buffer, FILTER_WINDOW_SIZE, med);
+    float threshold = OUTLIER_THRESHOLD * mad_val;
+
+    if (fabsf(raw - med) > threshold) {
+        return false;
+    } else {
+        *filtered_out = raw;
+        return true;
+    }
+}
+
+
+void valid_water_level_task() {
+    ColorRGB color = {
+        .red = 50,
+        .green = 50,
+        .blue = 0
+    };
+    animation_state_t anim_sate = {.i = 0, .j = -1};
+
+    ESP_LOGI(TAG, "Valid water task started!");
+    while(1) {
+        if(validWaterLevel) {
+            ssd1306_clear_screen(&dev, false);
+            welcome_screen(&dev);
+
+            led_strip_clear(led_strip);
+
+            vTaskSuspend(NULL);
+            ssd1306_clear_screen(&dev, false);
+            refill_water_tank_info_screen(&dev);
+        }
+
+        led_strip_idle_rotating_animation_iteration(&led_strip, color, 1, 1, &anim_sate);
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+
+void water_regulator_timer_task(TimerHandle_t xTimer) {
+    const float raw_distance = hcsr04_read_distance_cm();
+
+    if(raw_distance < 0) {
         ESP_LOGE(TAG, "Water level sensor error!");
         valve_close();
         valve_status = CLOSED;
+        return;
     }
-    else {
+
+    float distance = 0;
+    if (!filter_distance(raw_distance, &distance)) {
+        #ifdef WATER_REGULATOR_DEBUG
+                ESP_LOGW(TAG, "Outlier detected: %.2f (skipped)", raw_distance);
+        #endif
+        return;
+    }
+
+    last_valid_distance = distance;
+
     #ifdef WATER_REGULATOR_DEBUG
-            ESP_LOGI(TAG, "Distance: %.4f", distance);
+        ESP_LOGI(TAG, "Distance (filtered): %.4f", distance);
     #endif
 
+    if(distance < WATER_ALARM_LEVEL) {
+        valve_close();
+        valve_status = CLOSED;
+        ESP_LOGW(TAG, "Water level too high!!!");
+    }
 
-        if(distance < WATER_ALARM_LEVEL) {
+    if(distance > WATER_Y_ZAD + WATER_HYSTERESIS / 2 ) {
+        validWaterLevel = false;
+    }
+
+    if(pump_status != WORKING) {
+        if(distance > WATER_Y_ZAD + WATER_HYSTERESIS / 2 && valve_status == CLOSED) {
+            gpio_set_level(LD2, 0);
+            valve_open();
+            valve_status = OPEN;
+            vTaskResume(xValidWaterLevelTask);
+        }
+        else if (distance < WATER_Y_ZAD - WATER_HYSTERESIS / 2 && valve_status == OPEN) {
+            gpio_set_level(LD2, 1);
             valve_close();
             valve_status = CLOSED;
-            ESP_LOGW(TAG, "Water level too high!!!");
-        }
-
-        if(pump_status != WORKING) {
-            if(distance > WATER_Y_ZAD + WATER_HYSTERESIS / 2 && valve_status == CLOSED) {
-                gpio_set_level(LD2, 0);
-                valve_open();
-                valve_status = OPEN;
-            }
-            else if (distance < WATER_Y_ZAD - WATER_HYSTERESIS / 2 && valve_status == OPEN) {
-                gpio_set_level(LD2, 1);
-                valve_close();
-                valve_status = CLOSED;
-            }
+            validWaterLevel = true;
         }
     }
 }
@@ -100,51 +189,62 @@ void tag_pouring_task() {
 
 
                 if(milliliters != 0) {
-                    if(xSemaphoreTake(xMotorMutex, 0)) {
-                        pump_status = WORKING;
-                        ESP_LOGI(TAG, "Started pouring!");
+                    if(xSemaphoreTake(xMotorMutex, 0) && validWaterLevel) {
+                        if(milliliters <= MAX_POUR_MILLILITERS) {
+                            pump_status = WORKING;
+                            ESP_LOGI(TAG, "Started pouring!");
 
-                        const double time_us_d = ((float)milliliters / PUMP_MILLILITERS_PER_SECOND) * 1000000.0;
-                        const int64_t time_us = (int64_t)time_us_d;
+                            const double time_us_d = ((float)milliliters / PUMP_MILLILITERS_PER_SECOND) * 1000000.0;
+                            const int64_t time_us = (int64_t)time_us_d;
 
-                        led_strip_clear(led_strip);
-                        pump_set_speed(&motor, 1.0f);
-                        const int64_t start_time = esp_timer_get_time();
-                        uint32_t led_idx = 0;
-                        while(esp_timer_get_time() - start_time < time_us) {
-                            const double elapsed_time = (double)(esp_timer_get_time() - start_time)/1000000.0;
-                            led_idx = round((elapsed_time / (time_us_d / 1000000.0)) * (LED_STRIP_LED_NUM - 1));
-                            led_strip_set_pixel(led_strip, led_idx, 50, 50, 50);
-                            led_strip_refresh(led_strip);
-                            vTaskDelay(pdMS_TO_TICKS(10));
-                        }
-                        pump_set_speed(&motor, 0.0f);
-                        led_strip_clear(led_strip);
+                            ssd1306_clear_screen(&dev, false);
+                            pouring_tag_info_screen(&dev, milliliters);
 
-                        ESP_LOGI(TAG, "Ended pouring!");
+                            led_strip_clear(led_strip);
+                            pump_set_speed(&motor, 1.0f);
+                            const int64_t start_time = esp_timer_get_time();
+                            uint32_t led_idx = 0;
+                            while(esp_timer_get_time() - start_time < time_us && validWaterLevel) {
+                                const double elapsed_time = (double)(esp_timer_get_time() - start_time)/1000000.0;
+                                led_idx = round((elapsed_time / (time_us_d / 1000000.0)) * (LED_STRIP_LED_NUM - 1));
+                                led_strip_set_pixel(led_strip, led_idx, 50, 50, 50);
+                                led_strip_refresh(led_strip);
+                                vTaskDelay(pdMS_TO_TICKS(10));
+                            }
+                            pump_set_speed(&motor, 0.0f);
+                            led_strip_clear(led_strip);
 
-                        int https_status = post_tag_record(uid, milliliters);
-                        if (https_status != 201) {
-                            ColorRGB ready_color = {100, 100, 0};
-                            led_strip_set_mono(&led_strip, ready_color);
+                            ESP_LOGI(TAG, "Ended pouring!");
+
+                            int https_status = post_tag_record(uid, milliliters);
+                            if (https_status != 201) {
+                                ColorRGB ready_color = {50, 50, 0};
+                                led_strip_set_mono(&led_strip, ready_color);
+                            }
+                            else {
+                                ColorRGB ready_color = {0, 50, 0};
+                                led_strip_set_mono(&led_strip, ready_color);
+                            }
+                            ssd1306_clear_screen(&dev, false);
+                            pouring_finished_screen(&dev);
+                            memset(uid, 0, sizeof(uint8_t)*7);
+
+                            buzzer_pouring_finished_signal(&buzzer_dev);
                         }
                         else {
-                            ColorRGB ready_color = {0, 100, 0};
+                            pouring_max_capacity_limit_trig_info_screen(&dev);
+                            ColorRGB ready_color = {50, 50, 0};
                             led_strip_set_mono(&led_strip, ready_color);
+                            buzzer_warning_signal(&buzzer_dev);
                         }
-                        ssd1306_clear_screen(&dev, false);
-                        pouring_finished_screen(&dev);
-                        memset(uid, 0, sizeof(uint8_t)*7);
-
-                        buzzer_pouring_finished_signal(&buzzer_dev);
                         vTaskDelay(pdMS_TO_TICKS(CUP_READY_DISPLAY_TIME_MS));
                         welcome_screen(&dev);
                         led_strip_clear(led_strip);
                         pump_status = IDLE;
-
                         xSemaphoreGive(xMotorMutex);
                     }
                 }
+
             }
         }
 
@@ -154,31 +254,44 @@ void tag_pouring_task() {
 
 void manual_pouring_task() {
     ColorRGB color = {50, 50, 50};
+    int64_t pouring_start_time = 0;
+    int64_t pouring_time = 0;
+    uint16_t poured_milliliters = 0;
     while(1) {
         int status = gpio_get_level(BTN_GPIO);
-        if (status == 1) {
-            if(xSemaphoreTake(xMotorMutex, 0)) {
+        if (status == 0) {
+            if(xSemaphoreTake(xMotorMutex, 0) && validWaterLevel) {
                 pump_status = WORKING;
                 ESP_LOGI(TAG, "Started pouring!");
                 led_strip_clear(led_strip);
                 pump_set_speed(&motor, 1.0f);
-                while(gpio_get_level(BTN_GPIO)) {
-                    led_strip_idle_rotating_animation_iteration(&led_strip, color, 1, 20);
+                pouring_start_time = esp_timer_get_time();
+                animation_state_t anim_sate = {.i = 0, .j = -1};
+
+                while(gpio_get_level(BTN_GPIO) == 0 && poured_milliliters <= MAX_POUR_MILLILITERS && validWaterLevel) {
+                    led_strip_idle_rotating_animation_iteration(&led_strip, color, 1, 20, &anim_sate);
                     vTaskDelay(pdMS_TO_TICKS(10));
+                    pouring_time = esp_timer_get_time() - pouring_start_time;
+                    poured_milliliters = (uint16_t)((double)pouring_time / 1000000.0 * PUMP_MILLILITERS_PER_SECOND);
                 }
+
+
                 pump_set_speed(&motor, 0.0f);
                 led_strip_clear(led_strip);
                 ESP_LOGI(TAG, "Ended pouring!");
 
-                ColorRGB ready_color = {0, 100, 0};
+                ColorRGB ready_color = {0, 50, 0};
                 led_strip_set_mono(&led_strip, ready_color);
                 ssd1306_clear_screen(&dev, false);
-                pouring_finished_screen(&dev);
+                pouring_manual_info_screen(&dev, poured_milliliters);
                 buzzer_pouring_finished_signal(&buzzer_dev);
                 vTaskDelay(pdMS_TO_TICKS(CUP_READY_DISPLAY_TIME_MS));
                 welcome_screen(&dev);
                 led_strip_clear(led_strip);
                 pump_status = IDLE;
+                poured_milliliters = 0;
+                pouring_start_time = 0;
+                pouring_time = 0;
 
                 xSemaphoreGive(xMotorMutex);
             }
@@ -198,8 +311,9 @@ void init_task() {
     };
 
     ESP_LOGI(TAG, "Init task start!");
+    animation_state_t anim_sate = {.i = 0, .j = -1};
     while(initializing && !factoryResetStarted) {
-        led_strip_idle_rotating_animation_iteration(&led_strip, color, 1, 1);
+        led_strip_idle_rotating_animation_iteration(&led_strip, color, 1, 1, &anim_sate);
         vTaskDelay(pdMS_TO_TICKS(100));
     }
     led_strip_clear(led_strip);

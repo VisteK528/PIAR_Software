@@ -26,7 +26,8 @@
 #define BTN_GPIO                        GPIO_NUM_0
 #define LD2                             GPIO_NUM_1
 
-#define PUMP_MILLILITERS_PER_SECOND     24.16f
+#define PUMP_MILLILITERS_PER_SECOND     7.15f
+#define MAX_POUR_MILLILITERS            750
 
 extern ValveStatus_t valve_status;
 extern const float WATER_Y_ZAD;
@@ -43,6 +44,17 @@ extern SSD1306_t dev;
 extern i2c_master_dev_handle_t buzzer_dev;
 
 extern bool initializing;
+extern bool startup;
 extern bool factoryResetStarted;
+extern bool validWaterLevel;
+
+extern TimerHandle_t xWaterLevelRegulator;
+extern TaskHandle_t xValidWaterLevelTask;
+
+extern TaskHandle_t xTagPourHandle;
+extern TaskHandle_t xManualPourHandle;
+
+extern TaskHandle_t xInitTaskHandle;
+extern TaskHandle_t xFactoryResetTaskHandle;
 
 #endif //SETUP_H

@@ -1,5 +1,6 @@
 #include "display_functions.h"
 #include "font8x8_basic.h"
+#include "setup.h"
 
 static uint8_t logo_image[1024] = {
 	0x00, 0x07, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xf0, 0x00,
@@ -78,10 +79,6 @@ void init_display(SSD1306_t* dev) {
 
 void welcome_screen(SSD1306_t* dev) {
     ssd1306_clear_screen(dev, false);
-
-    // ssd1306_display_text(dev, 0, "SMART", 5, false);
-    // ssd1306_display_text(dev, 2, "WATER", 5, false);
-    // ssd1306_display_text(dev, 4, "DISTRIBUTOR", 11, false);
 	ssd1306_bitmaps(dev, 0, 0, logo_image, 128, 64, false);
 }
 
@@ -95,5 +92,54 @@ void factory_reset_screen(SSD1306_t* dev, uint8_t time_to_restart) {
     char text[25];
     sprintf(text, "Restarting in %d s", time_to_restart);
     ssd1306_display_text(dev, 3, text, 25, false);
+}
+
+void failed_to_connect_to_wifi_screen(SSD1306_t* dev) {
+	ssd1306_display_text(dev, 0, "Cannot connect", 15, false);
+	ssd1306_display_text(dev, 1, "to WiFi!", 8, false);
+	ssd1306_display_text(dev, 4, "Please check", 12, false);
+	ssd1306_display_text(dev, 5, "if your WiFi is", 15, false);
+	ssd1306_display_text(dev, 6, "on and start", 12, false);
+	ssd1306_display_text(dev,7, "the device again", 16, false);
+}
+
+void wifi_connection_attempt_screen(SSD1306_t* dev, uint8_t attempt_number, uint8_t max_attempts) {
+	ssd1306_display_text(dev, 1, "Connecting...", 13, false);
+	char text[16];
+	if(attempt_number <= 99 && max_attempts <= 99) {
+		sprintf(text, "Attempt %02d / %02d", attempt_number, max_attempts);
+	}
+	ssd1306_display_text(dev, 5, text, 16, false);
+}
+
+void pouring_tag_info_screen(SSD1306_t* dev, uint16_t milliliters) {
+	char text[17];
+	sprintf(text, "Pouring %3d ml", milliliters);
+	ssd1306_display_text(dev, 4, text, 17, false);
+}
+
+void pouring_manual_info_screen(SSD1306_t* dev, uint16_t milliliters) {
+	char text[16];
+	sprintf(text, "Poured %3d ml", milliliters);
+	ssd1306_display_text(dev, 1, text, 16, false);
+
+	ssd1306_display_text(dev, 3, "Take your water", 15, false);
+	ssd1306_display_text(dev, 5, "Please", 6, false);
+}
+
+void pouring_max_capacity_limit_trig_info_screen(SSD1306_t* dev) {
+	ssd1306_display_text(dev, 0, "Cannot pour", 11, false);
+	ssd1306_display_text(dev, 1, "specified", 9, false);
+	ssd1306_display_text(dev, 2, "amount of water", 15, false);
+
+	ssd1306_display_text(dev, 5, "Current limit:", 15, false);
+	char text[7];
+	sprintf(text, "%3d ml", MAX_POUR_MILLILITERS);
+	ssd1306_display_text(dev, 6, text, 7, false);
+}
+
+void refill_water_tank_info_screen(SSD1306_t* dev) {
+	ssd1306_display_text(dev, 1, "Please refill", 13, false);
+	ssd1306_display_text(dev, 5, "the water tank", 14, false);
 }
 

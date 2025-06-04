@@ -13,12 +13,10 @@ void hcsr04_init() {
 }
 
 float hcsr04_read_distance_cm() {
-    // Send 10us pulse to TRIG
     gpio_set_level(TRIG_GPIO, 1);
     esp_rom_delay_us(10);
     gpio_set_level(TRIG_GPIO, 0);
 
-    // Wait for ECHO to go HIGH
     int64_t start_time = esp_timer_get_time();
     while (gpio_get_level(ECHO_GPIO) == 0) {
         if (esp_timer_get_time() - start_time > 1000) {
@@ -27,7 +25,6 @@ float hcsr04_read_distance_cm() {
         }
     }
 
-    // Measure HIGH time duration
     int64_t echo_start = esp_timer_get_time();
     while (gpio_get_level(ECHO_GPIO) == 1) {
         if (esp_timer_get_time() - echo_start > 25000) {
@@ -38,6 +35,6 @@ float hcsr04_read_distance_cm() {
     int64_t echo_end = esp_timer_get_time();
     int64_t duration_us = echo_end - echo_start;
 
-    float distance_cm = duration_us / 58.0;
+    float distance_cm = duration_us * 0.034 / 2.;
     return distance_cm;
 }

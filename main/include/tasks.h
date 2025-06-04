@@ -11,5 +11,6 @@ void tag_pouring_task();
 void manual_pouring_task();
 void factory_reset_task();
 void pour_manager_task();
+void valid_water_level_task();
 
 #endif //TASKS_H
