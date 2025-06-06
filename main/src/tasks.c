@@ -24,6 +24,7 @@
 #include "pn532.h"
 #include "api_requests.h"
 #include "buzzer_i2c.h"
+#include "nvs_flash.h"
 
 #define FILTER_WINDOW_SIZE 11
 #define OUTLIER_THRESHOLD 3.5
@@ -48,7 +49,7 @@ static void extract_data_from_tag(uint8_t* buffer, uint8_t* uid, uint16_t* ml) {
 static void factory_reset() {
     // Reset WiFi credentials
     wifi_prov_mgr_reset_provisioning();
-
+    ESP_ERROR_CHECK(nvs_flash_erase());
     esp_restart();
 }
 
@@ -105,6 +106,8 @@ void valid_water_level_task() {
 
     ESP_LOGI(TAG, "Valid water task started!");
     while(1) {
+        xEventGroupWaitBits(xWifiConnectingEventGroup, SYSTEM_BIT_WIFI_OK,
+            false, true, portMAX_DELAY);
         if(validWaterLevel) {
             ssd1306_clear_screen(&dev, false);
             welcome_screen(&dev);
@@ -151,7 +154,7 @@ void water_regulator_timer_task(TimerHandle_t xTimer) {
         ESP_LOGW(TAG, "Water level too high!!!");
     }
 
-    if(distance > WATER_Y_ZAD + WATER_HYSTERESIS / 2 ) {
+    if(distance > WATER_Y_ZAD + WATER_HYSTERESIS / 2 && valve_status == CLOSED) {
         validWaterLevel = false;
     }
 
@@ -160,7 +163,10 @@ void water_regulator_timer_task(TimerHandle_t xTimer) {
             gpio_set_level(LD2, 0);
             valve_open();
             valve_status = OPEN;
-            vTaskResume(xValidWaterLevelTask);
+            validWaterLevel = true;
+            if (xValidWaterLevelTask != NULL) {
+                vTaskResume(xValidWaterLevelTask);
+            }
         }
         else if (distance < WATER_Y_ZAD - WATER_HYSTERESIS / 2 && valve_status == OPEN) {
             gpio_set_level(LD2, 1);
@@ -176,6 +182,9 @@ void tag_pouring_task() {
     uint8_t uid_length;
 
     while(1) {
+        xEventGroupWaitBits(xWifiConnectingEventGroup, SYSTEM_BIT_WIFI_OK,
+            false, true, portMAX_DELAY);
+
         bool success = pn532_readPassiveTargetID(&pn532_dev, 0x00, uid, &uid_length, 1000);
 
         if (success) {
@@ -186,7 +195,7 @@ void tag_pouring_task() {
                 ESP_LOGI(TAG, "UID: %02X:%02X:%02X:%02X:%02X:%02X:%02X",
                      uid[0], uid[1], uid[2], uid[3], uid[4], uid[5], uid[6]);
                 ESP_LOGI(TAG, "Milliliters to pour: %d ml", milliliters);
-
+                ESP_LOGI(TAG, "Water status: %d", validWaterLevel);
 
                 if(milliliters != 0) {
                     if(xSemaphoreTake(xMotorMutex, 0) && validWaterLevel) {
@@ -258,6 +267,9 @@ void manual_pouring_task() {
     int64_t pouring_time = 0;
     uint16_t poured_milliliters = 0;
     while(1) {
+        xEventGroupWaitBits(xWifiConnectingEventGroup, SYSTEM_BIT_WIFI_OK,
+            false, true, portMAX_DELAY);
+
         int status = gpio_get_level(BTN_GPIO);
         if (status == 0) {
             if(xSemaphoreTake(xMotorMutex, 0) && validWaterLevel) {

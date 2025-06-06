@@ -13,9 +13,11 @@
 
 // Water Regulator
 //#define WATER_REGULATOR_DEBUG
+#define BLOCK_WATER_REFILL_TASK
 
 #define GPIO_INPUT_IO                   9
 #define GPIO_INPUT_PIN_SEL              (1ULL << GPIO_INPUT_IO)
+#define SYSTEM_BIT_WIFI_OK              (1 << 0)
 
 #define SPI2_MISO                       21
 #define SPI2_MOSI                       22
@@ -40,6 +42,7 @@ extern bdc_motor_handle_t motor;
 extern led_strip_handle_t led_strip;
 
 extern SemaphoreHandle_t xMotorMutex;
+extern EventGroupHandle_t xWifiConnectingEventGroup;
 extern SSD1306_t dev;
 extern i2c_master_dev_handle_t buzzer_dev;
 
@@ -56,5 +59,7 @@ extern TaskHandle_t xManualPourHandle;
 
 extern TaskHandle_t xInitTaskHandle;
 extern TaskHandle_t xFactoryResetTaskHandle;
+
+extern char API_TOKEN[68];
 
 #endif //SETUP_H

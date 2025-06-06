@@ -143,3 +143,19 @@ void refill_water_tank_info_screen(SSD1306_t* dev) {
 	ssd1306_display_text(dev, 5, "the water tank", 14, false);
 }
 
+void authentication_failed_screen(SSD1306_t* dev) {
+	ssd1306_display_text(dev, 1, "Incorrect WiFi", 14, false);
+	ssd1306_display_text(dev, 2, "password!", 9, false);
+
+	ssd1306_display_text(dev, 4, "Please, try", 11, false);
+	ssd1306_display_text(dev, 5, "again!", 6, false);
+}
+
+void wifi_not_found_screen(SSD1306_t* dev) {
+	ssd1306_display_text(dev, 1, "WiFi not", 8, false);
+	ssd1306_display_text(dev, 2, "found!", 6, false);
+
+	ssd1306_display_text(dev, 4, "Please, try", 11, false);
+	ssd1306_display_text(dev, 5, "again!", 6, false);
+}
+

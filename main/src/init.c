@@ -1,5 +1,5 @@
+#include "init.h"
 #include <string.h>
-
 #include "buzzer_i2c.h"
 #include "setup.h"
 #include "hc_sr04.h"
@@ -45,10 +45,36 @@ static void IRAM_ATTR gpio_isr_handler(void* arg)
 
             BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
-            vTaskNotifyGiveFromISR(xFactoryResetTaskHandle, &xHigherPriorityTaskWoken);
+            if(xFactoryResetTaskHandle != NULL) {
+                vTaskNotifyGiveFromISR(xFactoryResetTaskHandle, &xHigherPriorityTaskWoken);
+            }
             portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
         }
     }
+}
+
+static void authentication_failed_info() {
+    authentication_failed_screen(&dev);
+    ColorRGB color ={
+        .red = 50,
+        .green = 50,
+        .blue = 0
+    };
+
+    led_strip_set_mono(&led_strip, color);
+    buzzer_warning_signal(&buzzer_dev);
+}
+
+static void wifi_network_not_found_info() {
+    wifi_not_found_screen(&dev);
+    ColorRGB color ={
+        .red = 50,
+        .green = 50,
+        .blue = 0
+    };
+
+    led_strip_set_mono(&led_strip, color);
+    buzzer_warning_signal(&buzzer_dev);
 }
 
 /* Handler for the optional provisioning endpoint registered by the application.
@@ -62,6 +88,8 @@ static esp_err_t custom_prov_data_handler(uint32_t session_id, const uint8_t *in
 {
     const char *TAG = "CUSTOM_PROV";
 
+    ESP_LOGI(TAG, "Inside custom prov");
+
     if (inbuf && inlen > 0) {
         // Print incoming data as string and hex
         ESP_LOGI(TAG, "Received data (len=%d): %.*s", (int)inlen, (int)inlen, (const char *)inbuf);
@@ -69,6 +97,8 @@ static esp_err_t custom_prov_data_handler(uint32_t session_id, const uint8_t *in
     } else {
         ESP_LOGW(TAG, "Received empty or null data");
     }
+
+    set_api_token((const char *)inbuf);
 
     // Prepare response message
     const char *response = "SUCCESS";
@@ -126,6 +156,12 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         if (s_retry_num < WIFI_MAX_RETRY) {
             if(s_retry_num == 0) {
+                if(xWaterLevelRegulator != NULL) {
+                    if(xTimerIsTimerActive(xWaterLevelRegulator) != pdFALSE) {
+                        xTimerStop(xWaterLevelRegulator, 0);
+                    }
+                }
+                xEventGroupClearBits(xWifiConnectingEventGroup, SYSTEM_BIT_WIFI_OK);
                 ssd1306_clear_screen(&dev, false);
             }
             s_retry_num++;
@@ -137,7 +173,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
 
         } else {
             ESP_LOGE("WIFI", "Failed to connect to the AP after %d attempts", WIFI_MAX_RETRY);
-
+            initializing = false;
             ColorRGB color ={
                 .red = 50,
                 .green = 0,
@@ -148,6 +184,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
             ssd1306_clear_screen(&dev, false);
             failed_to_connect_to_wifi_screen(&dev);
             buzzer_error_signal(&buzzer_dev);
+            xEventGroupSetBits(xWifiConnectingEventGroup, SYSTEM_BIT_WIFI_OK);
         }
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
@@ -158,15 +195,29 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
         if(startup) {
             const TickType_t xTimerPeriod = pdMS_TO_TICKS(200);
             xWaterLevelRegulator = xTimerCreate("WaterLevelRegulator", xTimerPeriod, pdTRUE, (void *)0, water_regulator_timer_task);
-            xTaskCreate(factory_reset_task, "factoryResetTask", 4096, NULL, 6, &xFactoryResetTaskHandle);
 
             xTaskCreate(tag_pouring_task, "tagPouringTask", 4096, NULL, 4, &xTagPourHandle);
             xTaskCreate(manual_pouring_task, "manualPouringTask", 4096, NULL, 4, &xManualPourHandle);
-            xTaskCreate(valid_water_level_task, "validWaterLevelTask", 4096, NULL, 5, &xValidWaterLevelTask);
 
-            xTimerStart(xWaterLevelRegulator, 0);
+            #ifndef BLOCK_WATER_REFILL_TASK
+                        xTaskCreate(valid_water_level_task, "validWaterLevelTask", 4096, NULL, 5, &xValidWaterLevelTask);
+            #endif
+
             startup = false;
         }
+
+        xEventGroupSetBits(xWifiConnectingEventGroup, SYSTEM_BIT_WIFI_OK);
+        if(xTimerIsTimerActive(xWaterLevelRegulator) == pdFALSE) {
+            xTimerStart(xWaterLevelRegulator, 0);
+        }
+
+        bool provisioned = false;
+        wifi_prov_mgr_is_provisioned(&provisioned);
+
+        if (!provisioned) {
+            wifi_prov_mgr_stop_provisioning();
+        }
+
 
         ssd1306_clear_screen(&dev, false);
         welcome_screen(&dev);
@@ -176,7 +227,6 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base,
 
 void peripheral_initialization() {
     led_strip_init(&led_strip);
-
     valve_init();
     pump_init(&motor);
     pump_set_direction_clockwise();
@@ -190,6 +240,7 @@ void peripheral_initialization() {
 
     buzzer_init(&i2c0_bus, &buzzer_dev);
     xMotorMutex = xSemaphoreCreateMutex();
+    xWifiConnectingEventGroup = xEventGroupCreate();
 
 
     pn532_spi_init(&pn532_dev, SPI2_CLK, SPI2_MISO, SPI2_MOSI, RFID1_SS);
@@ -248,12 +299,6 @@ void peripheral_initialization() {
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_PROV_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL));
 
-    ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_PROV_EVENT,
-                                                        ESP_EVENT_ANY_ID,
-                                                        &event_handler,
-                                                        NULL,
-                                                        NULL));
-
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT,
                                                         ESP_EVENT_ANY_ID,
                                                         &wifi_event_handler,
@@ -264,6 +309,8 @@ void peripheral_initialization() {
                                                         &wifi_event_handler,
                                                         NULL,
                                                         NULL));
+
+    welcome_screen(&dev);
 }
 
 
@@ -287,7 +334,8 @@ void wifi_setup() {
         };
 
         ESP_ERROR_CHECK(wifi_prov_mgr_init(config));
-        wifi_prov_mgr_endpoint_create("API-token-endpoint");
+        //wifi_prov_mgr_endpoint_create("API-token-endpoint");
+        wifi_prov_mgr_endpoint_create("custom-data");
 
         // Security 1 = Proof of Possession
         const char *pop = "abcd1234";
@@ -298,11 +346,13 @@ void wifi_setup() {
         snprintf(service_name, sizeof(service_name), "WATER_DISP-%02X%02X", eth_mac[4], eth_mac[5]);
         wifi_prov_mgr_disable_auto_stop(1000);
         ESP_ERROR_CHECK(wifi_prov_mgr_start_provisioning(WIFI_PROV_SECURITY_1, pop, service_name, NULL));
-        wifi_prov_mgr_endpoint_register("API-token-endpoint", custom_prov_data_handler, NULL);
+        //wifi_prov_mgr_endpoint_register("API-token-endpoint", custom_prov_data_handler, NULL);
+        wifi_prov_mgr_endpoint_register("custom-data", custom_prov_data_handler, NULL);
 
         wifi_prov_mgr_wait();
 
-        wifi_prov_mgr_endpoint_unregister("API-token-endpoint");
+        //wifi_prov_mgr_endpoint_unregister("API-token-endpoint");
+        wifi_prov_mgr_endpoint_unregister("custom-data");
         wifi_prov_mgr_deinit();
 
 
@@ -319,5 +369,64 @@ void wifi_setup() {
     }
 }
 
+void set_api_token(char* token) {
+    nvs_handle_t nvs_handle;
+    esp_err_t err;
 
+    err = nvs_open("provisioning", NVS_READWRITE, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE("NVS", "Failed to open NVS: %s", esp_err_to_name(err));
+        return;
+    }
 
+    err = nvs_set_str(nvs_handle, "dev_name", token);
+    if (err != ESP_OK) {
+        ESP_LOGE("NVS", "Failed to write string: %s", esp_err_to_name(err));
+    }
+
+    err = nvs_commit(nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE("NVS", "Failed to commit: %s", esp_err_to_name(err));
+    }
+    ESP_LOGI(TAG, "API TOKEN successfully set!");
+    nvs_close(nvs_handle);
+}
+
+void get_api_token() {
+    nvs_handle_t nvs_handle;
+    esp_err_t err = nvs_open("provisioning", NVS_READONLY, &nvs_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE("NVS", "Failed to open NVS: %s", esp_err_to_name(err));
+        return;
+    }
+
+    size_t len = 0;
+    err = nvs_get_str(nvs_handle, "dev_name", NULL, &len);
+    if (err != ESP_OK || len == 0) {
+        ESP_LOGE("NVS", "Failed to get length of API token: %s", esp_err_to_name(err));
+        nvs_close(nvs_handle);
+        return;
+    }
+
+    char *api_token = malloc(len);
+    if (api_token == NULL) {
+        ESP_LOGE("NVS", "Memory allocation failed!");
+        nvs_close(nvs_handle);
+        return;
+    }
+
+    err = nvs_get_str(nvs_handle, "dev_name", api_token, &len);
+    if (err != ESP_OK) {
+        ESP_LOGE("NVS", "Failed to read API token: %s", esp_err_to_name(err));
+        free(api_token);
+        nvs_close(nvs_handle);
+        return;
+    }
+
+    snprintf(API_TOKEN, sizeof(API_TOKEN), "Bearer %s", api_token);
+    ESP_LOGI(TAG, "API TOKEN successfully read!");
+    ESP_LOGI(TAG, "%s", API_TOKEN);
+
+    free(api_token);
+    nvs_close(nvs_handle);
+}

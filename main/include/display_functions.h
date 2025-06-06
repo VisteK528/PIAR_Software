@@ -21,4 +21,7 @@ void pouring_tag_info_screen(SSD1306_t* dev, uint16_t milliliters);
 void wifi_connection_attempt_screen(SSD1306_t* dev, uint8_t attempt_number, uint8_t max_attempts);
 void failed_to_connect_to_wifi_screen(SSD1306_t* dev);
 
+void authentication_failed_screen(SSD1306_t* dev);
+void wifi_not_found_screen(SSD1306_t* dev);
+
 #endif //DISPLAY_FUNCTIONS_H

@@ -26,6 +26,9 @@
 #include "pn532.h"
 #include "init.h"
 
+// API Token
+char API_TOKEN[68];
+
 // Water Regulator
 ValveStatus_t valve_status = CLOSED;
 
@@ -43,6 +46,7 @@ TaskHandle_t xInitTaskHandle = NULL;
 TaskHandle_t xFactoryResetTaskHandle = NULL;
 
 // Other handles
+EventGroupHandle_t xWifiConnectingEventGroup = NULL;
 SemaphoreHandle_t xMotorMutex;
 
 // Device handles
@@ -84,6 +88,10 @@ void app_main(void)
 {
     peripheral_initialization();
     wifi_setup();
+    get_api_token();
+
+    xTaskCreate(factory_reset_task, "factoryResetTask", 4096, NULL, 6, &xFactoryResetTaskHandle);
+    ESP_LOGI(TAG, "WATER DISP ready!");
 
     while(1) {
         vTaskDelay(pdMS_TO_TICKS(100));

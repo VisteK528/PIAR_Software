@@ -9,7 +9,6 @@
 
 
 #define POST_DISTRIBUTOR_RECORD "https://piar.blaise.app/dystrybutor/record"
-#define API_TOKEN               "Bearer $2b$10$B6SzfbXGQm7WUM9XuXHC/eN129nIFG9lRSYFdGu/GkW83Wr37Gx3G"
 
 static void format_bytes(const uint8_t *data, size_t len, char *out_str, size_t out_str_size) {
     if (len != 7 || out_str_size < 3 * len) {
